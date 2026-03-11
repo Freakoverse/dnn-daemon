@@ -22,7 +22,7 @@ import (
 
 const (
 	// LocalPort is where our DNS server listens
-	LocalPort = 5353
+	LocalPort = 15353
 	// UpstreamDNS is the fallback DNS for non-DNN queries
 	UpstreamDNS = "8.8.8.8:53"
 )
