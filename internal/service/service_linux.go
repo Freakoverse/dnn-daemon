@@ -89,10 +89,11 @@ WantedBy=multi-user.target
 		return fmt.Errorf("failed to write service file: %w", err)
 	}
 
-	// 3. Install CA certificate
+	// 3. Install CA certificate (system store + browser NSS database)
 	if err := installCA(); err != nil {
 		return fmt.Errorf("failed to install CA: %w", err)
 	}
+	installNSSCert()
 
 	// 4. Add IPv6 route for fd00::/8 to localhost (for transport interception)
 	fmt.Println("Adding IPv6 route for transport interception...")
@@ -135,8 +136,9 @@ func UninstallService() error {
 	fmt.Println("Removing IPv6 route...")
 	exec.Command("ip", "-6", "route", "del", "fd00::/8", "dev", "lo").Run()
 
-	// Remove CA
+	// Remove CA from system store and browser NSS database
 	uninstallCA()
+	uninstallNSSCert()
 
 	// Remove binary
 	os.Remove("/usr/local/bin/dnn-daemon")
@@ -216,4 +218,116 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0644)
+}
+
+// getRealUser returns the actual user who ran sudo (not root)
+func getRealUser() (string, string) {
+	// $SUDO_USER is set by sudo to the original user
+	user := os.Getenv("SUDO_USER")
+	if user == "" || user == "root" {
+		return "", ""
+	}
+	// Get home directory for this user
+	out, err := exec.Command("getent", "passwd", user).Output()
+	if err != nil {
+		return user, "/home/" + user
+	}
+	fields := splitColon(string(out))
+	if len(fields) >= 6 {
+		return user, fields[5]
+	}
+	return user, "/home/" + user
+}
+
+func splitColon(s string) []string {
+	var result []string
+	current := ""
+	for _, c := range s {
+		if c == ':' {
+			result = append(result, current)
+			current = ""
+		} else if c == '\n' {
+			break
+		} else {
+			current += string(c)
+		}
+	}
+	if current != "" {
+		result = append(result, current)
+	}
+	return result
+}
+
+const nssCAName = "DNN Daemon CA"
+
+// installNSSCert adds the DNN CA to the user's NSS database (used by Chrome/Brave/Chromium/Edge)
+func installNSSCert() {
+	caCertPath := "/etc/dnn/dnn-ca.crt"
+	if _, err := os.Stat(caCertPath); err != nil {
+		fmt.Println("Skipping NSS cert install: CA cert not found")
+		return
+	}
+
+	// Check if certutil is available
+	if _, err := exec.LookPath("certutil"); err != nil {
+		fmt.Println("Note: 'certutil' not found. To trust DNN certs in Chrome/Brave, install libnss3-tools:")
+		fmt.Println("  sudo apt install libnss3-tools")
+		fmt.Println("  Then re-run the installer.")
+		return
+	}
+
+	user, homeDir := getRealUser()
+	if user == "" {
+		fmt.Println("Skipping NSS cert install: could not determine real user")
+		return
+	}
+
+	nssDir := filepath.Join(homeDir, ".pki", "nssdb")
+
+	// Create the NSS database directory if it doesn't exist
+	if _, err := os.Stat(nssDir); os.IsNotExist(err) {
+		os.MkdirAll(nssDir, 0755)
+		// Initialize the NSS database
+		cmd := exec.Command("certutil", "-d", "sql:"+nssDir, "-N", "--empty-password")
+		cmd.Run()
+		// Fix ownership
+		exec.Command("chown", "-R", user+":"+user, filepath.Join(homeDir, ".pki")).Run()
+	}
+
+	// Remove old cert if it exists (in case of re-install)
+	exec.Command("certutil", "-d", "sql:"+nssDir, "-D", "-n", nssCAName).Run()
+
+	// Add the new cert
+	cmd := exec.Command("certutil", "-d", "sql:"+nssDir, "-A", "-t", "C,,", "-n", nssCAName, "-i", caCertPath)
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Warning: Failed to add CA to NSS database: %v\n", err)
+		return
+	}
+
+	// Fix ownership back to the real user
+	exec.Command("chown", "-R", user+":"+user, filepath.Join(homeDir, ".pki")).Run()
+
+	fmt.Printf("DNN CA installed in browser trust store for user '%s'\n", user)
+}
+
+// uninstallNSSCert removes the DNN CA from the user's NSS database
+func uninstallNSSCert() {
+	if _, err := exec.LookPath("certutil"); err != nil {
+		return
+	}
+
+	user, homeDir := getRealUser()
+	if user == "" {
+		return
+	}
+
+	nssDir := filepath.Join(homeDir, ".pki", "nssdb")
+	if _, err := os.Stat(nssDir); err != nil {
+		return
+	}
+
+	cmd := exec.Command("certutil", "-d", "sql:"+nssDir, "-D", "-n", nssCAName)
+	if err := cmd.Run(); err == nil {
+		fmt.Printf("DNN CA removed from browser trust store for user '%s'\n", user)
+	}
 }
