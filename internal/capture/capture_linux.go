@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -93,37 +94,59 @@ func (c *Capture) Stop() {
 	log.Printf("[Capture] Stopped DNS capture")
 }
 
-// setupIptables adds the redirect rule
+// setupIptables adds the redirect rule, excluding the daemon's own traffic
 func (c *Capture) setupIptables() error {
-	// Redirect outbound UDP 53 to local port
-	// iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-port 5353
+	uid := fmt.Sprintf("%d", os.Getuid())
+
+	// Rule 1: RETURN (skip redirect) for daemon's own DNS queries
+	// Prevents loop: daemon -> 8.8.8.8:53 -> iptables -> back to daemon
 	cmd := exec.Command("iptables", "-t", "nat", "-A", "OUTPUT",
 		"-p", "udp", "--dport", "53",
-		"-j", "REDIRECT", "--to-port", fmt.Sprintf("%d", LocalPort))
-
+		"-m", "owner", "--uid-owner", uid,
+		"-j", "RETURN")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("iptables command failed: %w (try running with sudo/root)", err)
+		return fmt.Errorf("iptables RETURN rule failed: %w (try running with sudo/root)", err)
+	}
+
+	// Rule 2: Redirect all OTHER outbound UDP 53 to our local DNS server
+	cmd = exec.Command("iptables", "-t", "nat", "-A", "OUTPUT",
+		"-p", "udp", "--dport", "53",
+		"-j", "REDIRECT", "--to-port", fmt.Sprintf("%d", LocalPort))
+	if err := cmd.Run(); err != nil {
+		// Clean up the RETURN rule on failure
+		exec.Command("iptables", "-t", "nat", "-D", "OUTPUT",
+			"-p", "udp", "--dport", "53",
+			"-m", "owner", "--uid-owner", uid,
+			"-j", "RETURN").Run()
+		return fmt.Errorf("iptables REDIRECT rule failed: %w", err)
 	}
 
 	c.iptablesSet = true
-	log.Printf("[Capture] Added iptables redirect: UDP 53 -> %d", LocalPort)
+	log.Printf("[Capture] Added iptables redirect: UDP 53 -> %d (excluding UID %s)", LocalPort, uid)
 	return nil
 }
 
-// removeIptables removes the redirect rule
+// removeIptables removes both redirect rules
 func (c *Capture) removeIptables() {
 	if !c.iptablesSet {
 		return
 	}
 
-	// Remove the rule
-	cmd := exec.Command("iptables", "-t", "nat", "-D", "OUTPUT",
+	uid := fmt.Sprintf("%d", os.Getuid())
+
+	// Remove REDIRECT rule
+	exec.Command("iptables", "-t", "nat", "-D", "OUTPUT",
 		"-p", "udp", "--dport", "53",
-		"-j", "REDIRECT", "--to-port", fmt.Sprintf("%d", LocalPort))
-	cmd.Run() // Ignore errors
+		"-j", "REDIRECT", "--to-port", fmt.Sprintf("%d", LocalPort)).Run()
+
+	// Remove RETURN rule
+	exec.Command("iptables", "-t", "nat", "-D", "OUTPUT",
+		"-p", "udp", "--dport", "53",
+		"-m", "owner", "--uid-owner", uid,
+		"-j", "RETURN").Run()
 
 	c.iptablesSet = false
-	log.Printf("[Capture] Removed iptables redirect rule")
+	log.Printf("[Capture] Removed iptables redirect rules")
 }
 
 // startDNSServer starts the local DNS server

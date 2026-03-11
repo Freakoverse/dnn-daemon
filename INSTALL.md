@@ -3,7 +3,22 @@
 > **Cross-Platform**: Works on Windows, Linux, and macOS  
 > **One-Click**: Just double-click to install
 
-The DNN Daemon makes any application (browser, curl, etc.) DNN-aware by running a local DNS server and HTTPS proxy.
+The DNN Daemon makes any application (browser, curl, etc.) DNN-aware by intercepting DNS queries and proxying HTTPS connections with automatic certificate verification.
+
+---
+
+## Download
+
+Get the latest binary from [GitHub Releases](https://github.com/Freakoverse/dnn-daemon/releases).
+
+| Platform | Binary |
+|----------|--------|
+| Windows x64 | `dnn-daemon-windows-amd64.exe` |
+| Windows ARM | `dnn-daemon-windows-arm64.exe` |
+| Linux x64 | `dnn-daemon-linux-amd64` |
+| Linux ARM | `dnn-daemon-linux-arm64` |
+| macOS Apple Silicon | `dnn-daemon-darwin-arm64` |
+| macOS Intel | `dnn-daemon-darwin-amd64` |
 
 ---
 
@@ -11,18 +26,23 @@ The DNN Daemon makes any application (browser, curl, etc.) DNN-aware by running 
 
 ### Windows
 
-1. Download `dnn-daemon.exe`
+1. Download `dnn-daemon-windows-amd64.exe`
 2. Double-click the exe
 3. Accept the UAC prompt
 4. Click **Yes** to install → Configure nodes → Done!
 
-### Linux
+### Linux (Ubuntu, ZorinOS, Debian, etc.)
 
 1. Download `dnn-daemon-linux-amd64`
-2. Right-click → Properties → "Allow executing as program"
-3. Double-click (or run `sudo ./dnn-daemon-linux-amd64`)
-4. Enter password when prompted
-5. Choose **Install** → Configure nodes → Done!
+2. Make it executable and install:
+   ```bash
+   chmod +x dnn-daemon-linux-amd64
+   sudo ./dnn-daemon-linux-amd64 --install
+   ```
+3. Verify it's running:
+   ```bash
+   systemctl status dnn-daemon
+   ```
 
 ### macOS
 
@@ -37,99 +57,97 @@ The DNN Daemon makes any application (browser, curl, etc.) DNN-aware by running 
 
 | Component | Windows | Linux | macOS |
 |-----------|---------|-------|-------|
-| **Service** | Windows Service (DNNDaemon) | systemd | launchd |
+| **Service** | Windows Service (DNNDaemon) | systemd unit | launchd plist |
 | **Binary** | `%ProgramFiles%\DNN\dnn-daemon.exe` | `/usr/local/bin/dnn-daemon` | `/usr/local/bin/dnn-daemon` |
 | **Config** | `%ProgramData%\DNN\config.yaml` | `/etc/dnn/dnn-daemon.yaml` | `/usr/local/etc/dnn/dnn-daemon.yaml` |
 | **CA Cert** | Windows Certificate Store | System CA store | macOS Keychain |
-| **DNS** | Network adapter settings | `/etc/resolv.conf` or systemd-resolved | networksetup |
+| **DNS Interception** | WinDivert driver | iptables NAT redirect | TUN interface |
+
+---
+
+## How DNS Interception Works
+
+Each platform uses a different method to capture DNS queries:
+
+### Windows — WinDivert
+- Captures DNS packets at the kernel level using the WinDivert driver
+- No system DNS settings are modified
+- `WinDivert.dll` and `WinDivert64.sys` are bundled with the binary
+
+### Linux — iptables NAT Redirect
+- Adds two iptables rules in the OUTPUT chain:
+  1. `RETURN` rule for the daemon's own UID (prevents DNS loop)
+  2. `REDIRECT` rule: UDP port 53 → port 15353 (daemon's local DNS server)
+- The daemon's own upstream queries to 8.8.8.8 bypass the redirect
+- Rules are automatically removed on shutdown/uninstall
+
+### macOS — TUN Interface
+- Creates a TUN interface for DNS interception
+- Routes DNS traffic through the daemon
 
 ---
 
 ## Command Line Usage
 
 ```bash
-# Install (with GUI dialogs)
-./dnn-daemon --install
+# Install as system service
+sudo ./dnn-daemon --install
 
-# Uninstall
-./dnn-daemon --uninstall
+# Uninstall (stops service, removes iptables rules, removes CA cert)
+sudo ./dnn-daemon --uninstall
 
-# Run in foreground (debugging)
-./dnn-daemon --debug
+# Run in foreground for debugging
+sudo ./dnn-daemon --debug
 
 # Run with custom config
-./dnn-daemon --config /path/to/config.yaml
+sudo ./dnn-daemon --config /path/to/config.yaml
 ```
 
 ---
 
 ## Uninstalling
 
-**Option 1: GUI**
-- Double-click the exe/binary again
-- Choose **Uninstall**
-
-**Option 2: Command Line**
+**Option 1: Command Line (recommended)**
 ```bash
-# Windows (as Administrator)
+# Windows (Admin PowerShell)
 .\dnn-daemon.exe --uninstall
 
 # Linux/macOS
 sudo ./dnn-daemon --uninstall
 ```
 
+**Option 2: GUI**
+- Double-click the binary again → Choose **Uninstall**
+
 > [!WARNING]
 > **Windows Users**: If you connected to multiple WiFi networks while the daemon was running, those networks may still have DNS set to 127.0.0.1. If internet breaks on another network, go to Settings → Network & Internet → Wi-Fi → [Your Network] → Hardware properties → Set DNS to "Automatic (DHCP)".
 
----
+### Emergency: Internet Broken (Linux)
 
-## How It Works
+If the daemon crashes without cleaning up iptables, your DNS will stop working. Fix it manually:
 
-DNN domains are detected by **pattern**, not by a fixed TLD. This allows them to coexist with normal DNS:
+```bash
+# Remove iptables rules immediately
+sudo iptables -t nat -D OUTPUT -p udp --dport 53 -j REDIRECT --to-port 15353
+sudo iptables -t nat -D OUTPUT -p udp --dport 53 -m owner --uid-owner 0 -j RETURN
 
-```
-Pattern: n + 4+ characters + BIP39 word
-Examples: nabobabout, nabceabsurd, freakoverse.nabobabout
-```
-
-```
-┌─────────────────────┐
-│  Any Application    │
-│  (browser, curl)    │
-└─────────────────────┘
-          │
-          ▼ DNS query: nabobabout?
-┌─────────────────────┐
-│  DNN Daemon         │
-│  ├─ DNS Server      │ → Pattern detection → 127.0.0.1
-│  ├─ Resolver        │ → DNN Node API
-│  └─ HTTPS Proxy     │ → 127.0.0.1:443
-└─────────────────────┘
-          │
-          ▼
-┌─────────────────────┐
-│  Destination Server │
-│  (with cert verify) │
-└─────────────────────┘
+# Stop the daemon
+sudo systemctl stop dnn-daemon
 ```
 
-1. **DNS Query**: App queries `nabobabout`
-2. **Pattern Detection**: Daemon detects DNN pattern → returns 127.0.0.1
-3. **Resolution**: Daemon queries DNN nodes for the real IP:port
-4. **Certificate Verification**: Daemon verifies server's TLS cert against declared cert in DNN
-5. **Proxy**: Daemon proxies the connection to the destination
+Your internet should come back instantly.
 
 ---
 
 ## Node Configuration
 
-During installation, you can configure which DNN nodes to use:
+During installation, you can configure which DNN nodes to use.
 
-**Default nodes:**
+**Default seed nodes:**
 - `https://node.icannot.xyz`
 - `http://64.111.92.122:8080`
 
-The daemon will also **automatically discover** additional nodes by querying connected nodes for their peer lists.
+The daemon automatically discovers additional nodes by crawling peers from connected nodes.
 
 ---
 
@@ -138,43 +156,55 @@ The daemon will also **automatically discover** additional nodes by querying con
 ### "Can't access DNN sites"
 
 1. Check if daemon is running:
-   - Windows: `sc query DNNDaemon`
-   - Linux: `systemctl status dnn-daemon`
-   - macOS: `launchctl list | grep dnn`
+   ```bash
+   # Windows
+   sc query DNNDaemon
 
-2. Check DNS is configured:
-   - Windows: `nslookup nabobabout 127.0.0.1`
-   - Linux/macOS: `dig @127.0.0.1 nabobabout`
+   # Linux
+   systemctl status dnn-daemon
 
-3. Try debug mode:
+   # macOS
+   launchctl list | grep dnn
+   ```
+
+2. Test DNS resolution:
+   ```bash
+   # Windows
+   nslookup nabandonaread 127.0.0.1
+
+   # Linux/macOS
+   dig @127.0.0.1 nabandonaread
+   ```
+
+3. Run in debug mode:
    ```bash
    # Stop service first
-   sc stop DNNDaemon  # or systemctl stop dnn-daemon
-   
-   # Run in debug mode to see logs
-   ./dnn-daemon --debug
+   sudo systemctl stop dnn-daemon  # or: sc stop DNNDaemon
+
+   # Run with visible logs
+   sudo ./dnn-daemon --debug
    ```
 
 ### "Certificate errors in browser"
 
-The DNN CA certificate may not be trusted. Re-run the installer to reinstall the CA.
+The DNN CA certificate may not be trusted by your browser. Re-run the installer to reinstall the CA certificate.
 
-### "Internet broken after uninstall" (Windows)
+### Service Logs
 
-If you connected to multiple WiFi networks while the daemon was running, those networks may still have DNS set to 127.0.0.1. Go to Settings → Network & Internet → Wi-Fi → [Your Network] → DNS → Set to "Automatic (DHCP)".
-
-### Service logs
-
-- Windows: Event Viewer → Windows Logs → Application → Filter by "DNNDaemon"
-- Linux: `journalctl -u dnn-daemon -f`
-- macOS: `cat /var/log/dnn-daemon.log`
+| Platform | Command |
+|----------|---------|
+| Windows | Event Viewer → Windows Logs → Application → Filter by "DNNDaemon" |
+| Linux | `journalctl -u dnn-daemon -f` |
+| macOS | `cat /var/log/dnn-daemon.log` |
 
 ---
 
 ## Building from Source
 
+Requires Go 1.21+.
+
 ```bash
-cd DNN/daemon
+cd daemon
 
 # Windows
 go build -o dnn-daemon.exe ./cmd/dnn-daemon
@@ -195,13 +225,18 @@ GOOS=darwin GOARCH=amd64 go build -o dnn-daemon-darwin-amd64 ./cmd/dnn-daemon
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| Main | `cmd/dnn-daemon/main.go` | Entry point, CLI handling |
-| DNS Server | `internal/dns/server.go` | Pattern-based DNN detection |
-| Detector | `internal/detector/detector.go` | BIP39 pattern matching |
-| Resolver | `internal/resolver/resolver.go` | DNN node API client |
-| HTTPS Proxy | `internal/httpsproxy/proxy.go` | TLS proxy with cert verification |
-| Config | `internal/config/config.go` | YAML configuration |
-| Service (Win) | `internal/service/service_windows.go` | Windows Service |
-| Service (Linux) | `internal/service/service_linux.go` | systemd |
-| Service (macOS) | `internal/service/service_darwin.go` | launchd |
-| Dialogs | `internal/service/dialogs_*.go` | Platform-specific GUI dialogs |
+| Entry point | `cmd/dnn-daemon/main.go` | CLI handling, install/uninstall |
+| DNS Capture (Win) | `internal/capture/capture_windows.go` | WinDivert DNS interception |
+| DNS Capture (Linux) | `internal/capture/capture_linux.go` | iptables NAT redirect |
+| DNS Capture (macOS) | `internal/capture/capture_darwin.go` | TUN-based interception |
+| Detector | `internal/detector/detector.go` | BIP39 two-word pattern matching |
+| Resolver | `internal/resolver/resolver.go` | Multi-node parallel resolution |
+| Cert Verifier | `internal/certverify/certverify.go` | 62600 cert PEM matching |
+| HTTPS Proxy | `internal/httpsproxy/proxy.go` | TLS termination & proxying |
+| Config | `internal/config/config.go` | YAML configuration loading |
+| Service | `internal/service/` | Platform service management |
+| Peer Discovery | `internal/peerdiscovery/` | Automatic node pool management |
+
+---
+
+*Last updated: 2026-03-11*
