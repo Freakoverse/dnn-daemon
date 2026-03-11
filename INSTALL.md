@@ -141,13 +141,30 @@ Your internet should come back instantly.
 
 ## Node Configuration
 
-During installation, you can configure which DNN nodes to use.
+**Windows:** During installation, a GUI dialog lets you add/remove nodes.
 
-**Default seed nodes:**
-- `https://node.icannot.xyz`
-- `http://64.111.92.122:8080`
+**Linux/macOS:** Edit the config file directly:
 
-The daemon automatically discovers additional nodes by crawling peers from connected nodes.
+| Platform | Config path |
+|----------|------------|
+| Windows | `%ProgramData%\DNN\config.yaml` |
+| Linux | `/etc/dnn/dnn-daemon.yaml` |
+| macOS | `/usr/local/etc/dnn/dnn-daemon.yaml` |
+
+```yaml
+# Example /etc/dnn/dnn-daemon.yaml
+nodes:
+  - https://node.icannot.xyz
+  - http://64.111.92.122:8080
+```
+
+To add or remove nodes after installation:
+```bash
+sudo nano /etc/dnn/dnn-daemon.yaml   # edit the node list
+sudo systemctl restart dnn-daemon     # apply changes
+```
+
+The daemon also **automatically discovers** additional nodes by crawling peers, so the config is just the seed list.
 
 ---
 
