@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -36,11 +37,18 @@ type CA struct {
 
 // CAPath returns the directory where CA files are stored
 func CAPath() string {
-	programData := os.Getenv("ProgramData")
-	if programData == "" {
-		programData = `C:\ProgramData`
+	switch runtime.GOOS {
+	case "linux":
+		return "/etc/dnn"
+	case "darwin":
+		return "/usr/local/etc/dnn"
+	default: // windows
+		programData := os.Getenv("ProgramData")
+		if programData == "" {
+			programData = `C:\ProgramData`
+		}
+		return filepath.Join(programData, "DNN")
 	}
-	return filepath.Join(programData, "DNN")
 }
 
 // CertPath returns the path to the CA certificate

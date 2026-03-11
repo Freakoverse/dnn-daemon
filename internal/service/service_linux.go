@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"dnn-daemon/internal/ca"
 )
 
 const serviceName = "dnn-daemon"
@@ -158,19 +160,27 @@ func RunService(cfg interface{}, debug bool) error {
 func installCA() error {
 	caDir := "/etc/dnn"
 	caCertPath := filepath.Join(caDir, "dnn-ca.crt")
+	caKeyPath := filepath.Join(caDir, "dnn-ca.key")
 
 	// Ensure CA directory exists
 	if err := os.MkdirAll(caDir, 0755); err != nil {
 		return err
 	}
 
-	// Generate CA if it doesn't exist
+	// Generate CA if cert or key doesn't exist
 	if _, err := os.Stat(caCertPath); os.IsNotExist(err) {
-		// CA generation is handled by the certgen package
-		// For now, just ensure the path exists
+		if _, err2 := os.Stat(caKeyPath); os.IsNotExist(err2) {
+			fmt.Println("Generating DNN CA certificate...")
+			caInst, err := ca.LoadOrGenerate()
+			if err != nil {
+				return fmt.Errorf("failed to generate CA: %w", err)
+			}
+			_ = caInst // CA is saved by LoadOrGenerate
+			fmt.Println("DNN CA certificate generated")
+		}
 	}
 
-	// Detect distro and install CA appropriately
+	// Detect distro and install CA to system store
 	if isDebian() {
 		// Debian/Ubuntu
 		destPath := "/usr/local/share/ca-certificates/dnn-ca.crt"
