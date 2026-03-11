@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/miekg/dns"
+	"dnn-daemon/internal/certverify"
 	"dnn-daemon/internal/detector"
 	"dnn-daemon/internal/mapper"
 	"dnn-daemon/internal/resolver"
@@ -229,6 +230,12 @@ func (c *Capture) handleDNNQuery(w dns.ResponseWriter, r *dns.Msg, name string) 
 	}
 	c.cache.Register(name)
 	c.cache.RegisterWithIP(name, resolution.IP, resolution.Port, certPEM)
+
+	// Pre-flight: verify server cert matches declared cert BEFORE returning DNS response
+	if certPEM != "" {
+		pfResult := certverify.PreflightVerify(resolution.IP, resolution.Port, certPEM, name)
+		c.cache.SetCertVerified(name, pfResult.Verified, pfResult.Error)
+	}
 
 	// Build response
 	resp := new(dns.Msg)

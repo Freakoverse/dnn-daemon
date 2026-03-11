@@ -29,6 +29,7 @@ type Resolution struct {
 	Port            int               // Target port (default 443)
 	DeclaredCertPEM string            // Certificate PEM from DNN node (kind 62600)
 	CertVerified    bool              // True if server cert was verified against declared cert
+	CertChecked     bool              // True if pre-flight verification was attempted
 	CertError       string            // If verification failed, the reason
 	Npubs           []string          // Server npubs for transport routing
 	SubdomainIPs    map[string]string // Subdomain name -> IP (e.g., "blossom" -> "96.9.124.48")
@@ -143,8 +144,8 @@ func (c *Cache) GetResolution(dnnName string) (*Resolution, bool) {
 }
 
 // HasDeclaredCert checks if a domain has a declared certificate from the 62600 event.
-// If a cert PEM exists, we trust the DNN event and generate a CA-signed cert.
-// Server cert verification happens separately at proxy time.
+// Returns true if cert PEM exists AND either verified or not yet checked.
+// Returns false if cert PEM is empty OR if pre-flight verification explicitly failed.
 func (c *Cache) HasDeclaredCert(dnnName string) bool {
 	name := strings.ToLower(strings.TrimSpace(dnnName))
 
@@ -155,20 +156,27 @@ func (c *Cache) HasDeclaredCert(dnnName string) bool {
 	if !ok || res == nil {
 		return false
 	}
-	return res.DeclaredCertPEM != ""
+	if res.DeclaredCertPEM == "" {
+		return false
+	}
+	// If pre-flight was attempted and FAILED, cert is not valid
+	if res.CertChecked && !res.CertVerified {
+		return false
+	}
+	return true
 }
 
 // IsCertValidForDomain checks if the declared cert is valid for this specific domain.
-// DNN Trust Model: if the parent domain has a declared cert PEM from the 62600 event,
-// we trust it and generate a CA-signed cert. The actual server cert verification
-// (PEM match) happens at proxy time, not here.
+// Tri-state logic:
+// - No declared cert → false (untrusted)
+// - Declared cert + preflight FAILED → false (untrusted, mismatch detected)
+// - Declared cert + preflight PASSED or not yet checked → true (trusted)
 func (c *Cache) IsCertValidForDomain(fullDomain string) bool {
 	fullDomain = strings.ToLower(strings.TrimSpace(fullDomain))
 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// Try to find the parent domain's resolution
 	parentName := c.findParentDomain(fullDomain)
 	if parentName == "" {
 		return false
@@ -179,8 +187,14 @@ func (c *Cache) IsCertValidForDomain(fullDomain string) bool {
 		return false
 	}
 
-	// Trust if a cert PEM was declared in the 62600 event
-	return res.DeclaredCertPEM != ""
+	if res.DeclaredCertPEM == "" {
+		return false
+	}
+	// If pre-flight was attempted and FAILED, domain is not trusted
+	if res.CertChecked && !res.CertVerified {
+		return false
+	}
+	return true
 }
 
 // findParentDomain finds the parent domain in resolutions cache
@@ -206,7 +220,6 @@ func (c *Cache) findParentDomain(fullDomain string) string {
 // NOTE: certCoversDomain function removed - DNN does not require SAN checking
 
 // SetCertVerified updates the certificate verification status for a domain
-// This should be called after connecting to the server and verifying the cert
 func (c *Cache) SetCertVerified(dnnName string, verified bool, certError string) {
 	name := strings.ToLower(strings.TrimSpace(dnnName))
 
@@ -214,6 +227,7 @@ func (c *Cache) SetCertVerified(dnnName string, verified bool, certError string)
 	defer c.mu.Unlock()
 
 	if res, ok := c.resolutions[name]; ok && res != nil {
+		res.CertChecked = true
 		res.CertVerified = verified
 		res.CertError = certError
 	}
