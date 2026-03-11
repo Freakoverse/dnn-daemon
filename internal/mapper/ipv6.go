@@ -142,11 +142,9 @@ func (c *Cache) GetResolution(dnnName string) (*Resolution, bool) {
 	return res, ok
 }
 
-// HasDeclaredCert checks if a domain has a VERIFIED certificate
-// This returns true only if:
-// 1. A certificate is declared in the 62600 event
-// 2. The server's cert was verified to match the declared cert
-// If either condition is false, signer should generate an untrusted cert
+// HasDeclaredCert checks if a domain has a declared certificate from the 62600 event.
+// If a cert PEM exists, we trust the DNN event and generate a CA-signed cert.
+// Server cert verification happens separately at proxy time.
 func (c *Cache) HasDeclaredCert(dnnName string) bool {
 	name := strings.ToLower(strings.TrimSpace(dnnName))
 
@@ -157,15 +155,13 @@ func (c *Cache) HasDeclaredCert(dnnName string) bool {
 	if !ok || res == nil {
 		return false
 	}
-	// Must have declared cert AND it must be verified
-	return res.DeclaredCertPEM != "" && res.CertVerified
+	return res.DeclaredCertPEM != ""
 }
 
-// IsCertValidForDomain checks if the declared cert is valid for this specific domain
-// DNN Trust Model:
-// 1. Parent domain has a declared cert
-// 2. Cert was verified to match server cert (done at proxy time)
-// NOTE: SAN checking is NOT required - DNN trust comes from Nostr event, not cert SAN
+// IsCertValidForDomain checks if the declared cert is valid for this specific domain.
+// DNN Trust Model: if the parent domain has a declared cert PEM from the 62600 event,
+// we trust it and generate a CA-signed cert. The actual server cert verification
+// (PEM match) happens at proxy time, not here.
 func (c *Cache) IsCertValidForDomain(fullDomain string) bool {
 	fullDomain = strings.ToLower(strings.TrimSpace(fullDomain))
 
@@ -173,7 +169,6 @@ func (c *Cache) IsCertValidForDomain(fullDomain string) bool {
 	defer c.mu.RUnlock()
 
 	// Try to find the parent domain's resolution
-	// For "blossom.freakoverse.nabtaabove", we need "freakoverse.nabtaabove"
 	parentName := c.findParentDomain(fullDomain)
 	if parentName == "" {
 		return false
@@ -184,9 +179,8 @@ func (c *Cache) IsCertValidForDomain(fullDomain string) bool {
 		return false
 	}
 
-	// Must have declared cert AND it must be verified
-	// (verification happens at proxy time against actual target server)
-	return res.DeclaredCertPEM != "" && res.CertVerified
+	// Trust if a cert PEM was declared in the 62600 event
+	return res.DeclaredCertPEM != ""
 }
 
 // findParentDomain finds the parent domain in resolutions cache
