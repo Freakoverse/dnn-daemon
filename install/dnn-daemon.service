@@ -1,0 +1,23 @@
+[Unit]
+Description=DNN Daemon - Decentralized Naming Network client
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dnn-daemon --config /etc/dnn/dnn-daemon.yaml
+Restart=always
+RestartSec=5
+
+# Security hardening
+User=dnn-daemon
+Group=dnn-daemon
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/log
+
+[Install]
+WantedBy=multi-user.target

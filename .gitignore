@@ -1,0 +1,21 @@
+# Build output
+dist/
+*.exe
+dnn-daemon-linux-*
+dnn-daemon-darwin-*
+dnn-daemon-windows-*
+*.zip
+
+# Temp/debug
+stop
+TODO.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,26 @@
+# DNN Daemon Configuration
+
+# DNN nodes to use for name resolution (failover in order)
+nodes:
+  - https://node.icannot.xyz
+  - http://64.111.92.122:8080
+
+# Resolution cache settings
+cache:
+  ttl: 60s
+  max_entries: 10000
+
+# TUN device settings (Linux)
+tun:
+  name: dnn0
+  mtu: 1420
+
+# Local DNS server settings
+dns:
+  listen_addr: "127.0.0.1:53"
+  domain: "dnn"  # Handles .dnn domains
+
+# Logging
+log:
+  level: info
+  file: /var/log/dnn-daemon.log

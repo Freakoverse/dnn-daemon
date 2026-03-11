@@ -1,0 +1,59 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
+    - name: Build all platforms
+      run: |
+        mkdir -p dist
+
+        # Windows
+        GOOS=windows GOARCH=amd64 go build -o dist/dnn-daemon-windows-amd64.exe ./cmd/dnn-daemon
+        GOOS=windows GOARCH=arm64 go build -o dist/dnn-daemon-windows-arm64.exe ./cmd/dnn-daemon
+
+        # Linux
+        GOOS=linux GOARCH=amd64 go build -o dist/dnn-daemon-linux-amd64 ./cmd/dnn-daemon
+        GOOS=linux GOARCH=arm64 go build -o dist/dnn-daemon-linux-arm64 ./cmd/dnn-daemon
+
+        # macOS
+        GOOS=darwin GOARCH=amd64 go build -o dist/dnn-daemon-darwin-amd64 ./cmd/dnn-daemon
+        GOOS=darwin GOARCH=arm64 go build -o dist/dnn-daemon-darwin-arm64 ./cmd/dnn-daemon
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: binaries
+        path: dist/
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: binaries
+        path: dist
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        draft: true
+        generate_release_notes: true
+        files: dist/*
